@@ -370,18 +370,19 @@ class WarmupAnnealHoldPolicy(_LRScheduler):
         return self.base_lrs
 
 
-def _squareroot_annealing(initial_lr, step, max_steps, min_lr):
-    mult = ((max_steps - step) / max_steps) ** 0.5
+def _power_annealing(initial_lr, step, max_steps, min_lr, power):
+    mult = ((max_steps - step) / max_steps) ** power
     out_lr = initial_lr * mult
     out_lr = max(out_lr, min_lr)
     return out_lr
+
+
+def _squareroot_annealing(initial_lr, step, max_steps, min_lr):
+    return _power_annealing(initial_lr, step, max_steps, min_lr, power=0.5)
 
 
 def _square_annealing(initial_lr, step, max_steps, min_lr):
-    mult = ((max_steps - step) / max_steps) ** 2
-    out_lr = initial_lr * mult
-    out_lr = max(out_lr, min_lr)
-    return out_lr
+    return _power_annealing(initial_lr, step, max_steps, min_lr, power=2)
 
 
 def _cosine_annealing(initial_lr, step, max_steps, min_lr):
