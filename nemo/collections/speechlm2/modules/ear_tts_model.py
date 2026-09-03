@@ -1141,37 +1141,41 @@ class RVQEARTTSModel(nn.Module):
     ) -> tuple[Tensor, Tensor, Tensor]:
         """Helper to compute all losses for the training step."""
         with torch.autocast(code.device.type, enabled=False):
-            # 1. LM Loss (predicting discrete tokens)
+            # 1. LM Loss (predicting discrete tokens).
             if not self.config.disable_eos_prediction:
                 eos_mask = (~audio_mask) & F.pad(audio_mask[:, :-1], [1, 0])
                 lm_mask = eos_mask | audio_mask
+
                 lm_target = torch.where(eos_mask, 1, 0)
                 lm_loss = (
                     F.cross_entropy(lm_logits.transpose(1, 2), lm_target, reduction="none") * lm_mask
                 ).sum() / lm_mask.sum().clamp_min(1)
+
             else:
                 lm_loss = 0.0
 
-            # 2. Continuous & KL Losses (for the MoG head)
+            # 2. Continuous & KL Losses (for the MoG head).
             target_mask = (~src_code_mask & tgt_code_mask) & audio_mask.unsqueeze(-1)
             reduced_target_mask = target_mask.any(dim=-1)
 
             cont_code_target = self.depthsum_embedding(
                 code * target_mask + (torch.zeros_like(code) + self.config.codebook_size) * (~target_mask)
             )
+
             mog_logits = mog_logits.float()
             mog_mus = mog_mus.float()
             mog_mu_res = mog_mu_res.float()
             mog_logs = mog_logs.float()
+
             with fp32_precision():
-                # Log probability of the true code under each Gaussian component
+                # Log probability of the true code under each Gaussian component.
                 logp_code = (
                     -0.5 * math.log(2 * math.pi) - mog_logs
                 ) * self.config.latent_size - 0.5 * self.mog_head.dist(
                     mog_mus, (cont_code_target - mog_mu_res) * torch.exp(-mog_logs)
                 )
 
-                # Compute posterior q(k|c)
+                # Compute posterior q(k|c).
                 q_kc = (
                     torch.softmax(
                         logp_code,
@@ -1180,15 +1184,18 @@ class RVQEARTTSModel(nn.Module):
                     * (1 - self.config.label_smoothing)
                     + self.config.label_smoothing / self.mog_head.num_predictions
                 ).detach()
+
                 log_q_kc = torch.log(q_kc + 1e-8).detach()
 
-                #  Continuous Loss (negative log-likelihood)
-                c_loss = (-(q_kc * logp_code).sum(-1) * reduced_target_mask).sum() / target_mask.sum().clamp_min(1)
+                clamped_target_mask_sum = target_mask.sum().clamp_min(1)
 
-                # KL Divergence Loss
+                #  Continuous Loss (negative log-likelihood).
+                c_loss = (-(q_kc * logp_code).sum(-1) * reduced_target_mask).sum() / clamped_target_mask_sum
+
+                # KL Divergence Loss.
                 k_loss = (
                     (q_kc * (log_q_kc - F.log_softmax(mog_logits, -1))).sum(-1) * reduced_target_mask
-                ).sum() / target_mask.sum().clamp_min(1)
+                ).sum() / clamped_target_mask_sum
 
         return lm_loss, c_loss, k_loss
 
